@@ -1,30 +1,51 @@
 import LibRawModule from './libraw.js';
 
 let ready;
-let LibRawClass;
 let raw;
+let Module;
 
 async function initLibRaw() {
 	ready = (async ()=>{
-		const module = await LibRawModule();
-		LibRawClass = module.LibRaw;
-		raw = new LibRawClass();
+		Module = await LibRawModule();
+		raw = new Module.LibRaw();
 	})();
 }
 
 initLibRaw();
 
 self.onmessage = async (event) => {
-  const { fn, args } = event.data;
-  try {
+  const { file, settings } = event.data;
+	const buffer = await file.arrayBuffer();
 	await ready;
-    let out = raw[fn](...args);
-    self.postMessage({out},  (Array.isArray(out)?out:(typeof out=='object'?Object.values(out):[])).map(a=>{
-		if([ArrayBuffer, Uint8Array, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array, Float32Array, Float64Array].some(b=>a instanceof b)) { // Transfer buffer
-			return a.buffer;
+	const byteArray = new Uint8Array(buffer);
+	const length = byteArray.length;
+	const ptr = Module._malloc(length);
+
+  try {
+  	Module.HEAPU8.set(byteArray, ptr);
+		await raw.open(ptr, length, settings); 
+		const out = await raw.extractThumbnail();
+
+		const transferList = [];
+
+		if (Array.isArray(out)) {
+			out.forEach(item => {
+				if (item?.buffer instanceof ArrayBuffer) {
+					transferList.push(item.buffer);
+				}
+			});
+		} else if (typeof out === 'object' && out !== null) {
+			Object.values(out).forEach(item => {
+				if (item?.buffer instanceof ArrayBuffer) {
+					transferList.push(item.buffer);
+				}
+			});
 		}
-	}).filter(a=>a));
+
+  	self.postMessage({ out }, transferList);
   } catch (err) {
     self.postMessage({ error: err.message });
-  }
+  } finally {
+		Module._free(ptr);
+	}
 };
