@@ -26,17 +26,15 @@ public:
 		}
 	}
 
-	void open(val jsBuffer, val settings) {
+	void open(uintptr_t ptr, size_t length, val settings) {
 		if (!processor_) {
 			throw std::runtime_error("LibRaw not initialized");
 		}
 
-		// 1) Convert the JS buffer (Uint8Array) to a C++ std::vector<uint8_t>.
-		std::vector<uint8_t> buffer = toNativeVector(jsBuffer);
-
 		applySettings(settings);
 
-		int ret = processor_->open_buffer((void*)buffer.data(), buffer.size());
+		uint8_t* bufferPtr = reinterpret_cast<uint8_t*>(ptr);
+		int ret = processor_->open_buffer((void*)bufferPtr, length);
 		if (ret != LIBRAW_SUCCESS) {
 			throw std::runtime_error("LibRaw: open_buffer() failed with code " + std::to_string(ret));
 		}
@@ -1133,20 +1131,7 @@ private:
 			setStringMember(params.dark_frame, settings["darkFrame"].as<std::string>());
 		}
 	}
-	// Convert a JS Uint8Array to a std::vector<uint8_t>
-	std::vector<uint8_t> toNativeVector(const val &jsBuffer) {
-		// Check for null/undefined
-		if (jsBuffer.isNull() || jsBuffer.isUndefined()) {
-			return {};
-		}
-		// Expecting a Uint8Array or something with a "length" property
-		size_t length = jsBuffer["length"].as<size_t>();
-		std::vector<uint8_t> buf(length);
-		for (size_t i = 0; i < length; i++) {
-			buf[i] = jsBuffer[i].as<uint8_t>();
-		}
-		return buf;
-	}
+
 	void setStringMember(char*& dest, const std::string& value) {
 		if (dest) {
 			delete[] dest;
