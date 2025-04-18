@@ -50,7 +50,7 @@ emconfigure ./configure \
   --disable-shared \
   --disable-examples \
   CFLAGS="-O3 -flto -ffast-math -msimd128 -DNDEBUG -DUSE_LCMS2 -I../includes" \
-  CXXFLAGS="-O3 -flto -ffast-math -msimd128 -DNDEBUG -DUSE_LCMS2 -I../includes" \
+  CXXFLAGS="-O3 -flto -lpthread -ffast-math -msimd128 -DNDEBUG -DUSE_LCMS2 -I../includes" \
   LDFLAGS="-s USE_PTHREADS=1 -lpthread -L../libs/ -llcms2"
 
 echo -e "\n==> Building LibRaw..."
@@ -72,6 +72,7 @@ emcc \
   -s USE_LIBJPEG=1 \
   -s USE_ZLIB=1 \
   -s MODULARIZE=1 \
+  -s EXPORTED_FUNCTIONS=_malloc,_free \
   -s EXPORT_ES6=1 \
   -s DISABLE_EXCEPTION_CATCHING=0 \
   -s ALLOW_MEMORY_GROWTH=1 \
