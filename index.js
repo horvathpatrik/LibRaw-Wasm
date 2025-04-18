@@ -70,4 +70,20 @@ export default class LibRaw {
 	async imageData() {
 		return await this.runFn('imageData');
 	}
+
+	async extractThumbnail() {
+		return await this.runFn('extractThumbnail');
+	}
+
+	async processRaw(file, settings) {
+		let prom = new Promise((res, err)=>{
+			this.waitForWorker = {
+				error: err,
+				return: res,
+			};
+		});
+		this.worker.postMessage({ file, settings }, file);
+		return await prom;
+	}
+
 }

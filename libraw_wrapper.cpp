@@ -957,6 +957,37 @@ public:
 		return resultObj;
 	}
 
+	val extractThumbnail() {
+		if (!processor_) {
+			throw std::runtime_error("LibRaw not initialized");
+		}
+
+		int ret = processor_->unpack_thumb();
+		if (ret != LIBRAW_SUCCESS) {
+			throw std::runtime_error("LibRaw: unpack_thumb() failed with code " + std::to_string(ret));
+		}
+	
+		libraw_thumbnail_t &thumb = processor_->imgdata.thumbnail;
+		if (!thumb.thumb || thumb.tlength == 0) {
+			throw std::runtime_error("No thumbnail data found");
+		}
+	
+		val result = val::object();
+		result.set("width", thumb.twidth);
+		result.set("height", thumb.theight);
+		result.set("format", static_cast<int>(thumb.tformat));
+		result.set("dataSize", static_cast<unsigned>(thumb.tlength));
+	
+		val typedArrayCtor = val::global("Uint8Array");
+		val jsData = typedArrayCtor.new_(val(thumb.tlength));
+		val memView = val(typed_memory_view(thumb.tlength, (uint8_t*)thumb.thumb));
+		jsData.call<void>("set", memView);
+		result.set("data", jsData);
+	
+		return result;
+	}
+	
+
 private:
 	LibRaw* processor_ = nullptr;
 	bool isUnpacked = false;
@@ -1171,5 +1202,6 @@ EMSCRIPTEN_BINDINGS(libraw_module) {
 		.constructor<>()
 		.function("open", &WASMLibRaw::open)
 		.function("metadata", &WASMLibRaw::metadata)
-		.function("imageData", &WASMLibRaw::imageData);
+		.function("imageData", &WASMLibRaw::imageData)
+		.function("extractThumbnail", &WASMLibRaw::extractThumbnail);
 }
