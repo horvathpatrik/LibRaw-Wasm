@@ -4,7 +4,7 @@ export default class LibRaw {
 		this.waitForWorker = false;
 		this.worker.onmessage = ({data}) => {
 			if(this.waitForWorker) {
-				let {"return": ret, "throw": thr} = this.waitForWorker;
+				let {"return": ret, "error": thr} = this.waitForWorker;
 				this.waitForWorker = false;
 				if(data?.error) {
 					thr(data.error);
