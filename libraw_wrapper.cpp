@@ -3,9 +3,18 @@
 #include <stdexcept>
 #include <iostream>
 #include <cstring>
+#include <algorithm>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/stb_image_write.h"
+
 
 // Emscripten Embind
 #include <emscripten/bind.h>
+#include <emscripten.h>
 
 // LibRaw includes
 #include "libraw/libraw.h"
@@ -36,6 +45,7 @@ public:
 		uint8_t* bufferPtr = reinterpret_cast<uint8_t*>(ptr);
 		int ret = processor_->open_buffer((void*)bufferPtr, length);
 		if (ret != LIBRAW_SUCCESS) {
+			reportErrorToJS("LibRaw: open_buffer() failed with code " + std::to_string(ret));
 			throw std::runtime_error("LibRaw: open_buffer() failed with code " + std::to_string(ret));
 		}
 	}
@@ -61,6 +71,7 @@ public:
 		meta.set("raw_height",  processor_->imgdata.sizes.raw_height);
 		meta.set("top_margin",  processor_->imgdata.sizes.top_margin);
 		meta.set("left_margin", processor_->imgdata.sizes.left_margin);
+		meta.set("flip",				flipCode);
 
 		// Basic camera info
 		meta.set("camera_make",  std::string(processor_->imgdata.idata.make));
@@ -958,35 +969,72 @@ public:
 	}
 
 	val extractThumbnail() {
-		if (!processor_) {
-			throw std::runtime_error("LibRaw not initialized");
-		}
+    if (!processor_) {
+        throw std::runtime_error("LibRaw not initialized");
+    }
 
-		int ret = processor_->unpack_thumb();
-		if (ret != LIBRAW_SUCCESS) {
-			throw std::runtime_error("LibRaw: unpack_thumb() failed with code " + std::to_string(ret));
-		}
-	
-		libraw_thumbnail_t &thumb = processor_->imgdata.thumbnail;
-		if (!thumb.thumb || thumb.tlength == 0) {
-			throw std::runtime_error("No thumbnail data found");
-		}
-	
-		val result = val::object();
-		result.set("width", thumb.twidth);
-		result.set("height", thumb.theight);
-		result.set("format", static_cast<int>(thumb.tformat));
-		result.set("dataSize", static_cast<unsigned>(thumb.tlength));
-	
-		val typedArrayCtor = val::global("Uint8Array");
-		val jsData = typedArrayCtor.new_(val(thumb.tlength));
-		val memView = val(typed_memory_view(thumb.tlength, (uint8_t*)thumb.thumb));
-		jsData.call<void>("set", memView);
-		result.set("data", jsData);
-	
-		return result;
+    int ret = processor_->unpack_thumb();
+    if (ret != LIBRAW_SUCCESS) {
+        throw std::runtime_error("LibRaw: unpack_thumb() failed with code " + std::to_string(ret));
+    }
+
+    libraw_thumbnail_t &thumb = processor_->imgdata.thumbnail;
+    if (!thumb.thumb || thumb.tlength == 0) {
+        throw std::runtime_error("No thumbnail data found");
+    }
+
+    // Supported thumbnail formats: 1=JPEG, 2=8bit bitmap, 3=16bit bitmap, 4=PNG
+    int tformat = thumb.tformat;
+    int orientation = processor_->imgdata.sizes.flip;
+    int correctedWidth = thumb.twidth;
+    int correctedHeight = thumb.theight;
+    std::vector<uint8_t> outputData;
+    int outFormat = 0; // 1=PNG, 2=JPEG
+
+    if (tformat == LIBRAW_THUMBNAIL_JPEG) {
+        // If orientation is normal, just return the JPEG as-is
+        if (orientation == 0 || orientation == 1) {
+            outputData.assign((uint8_t*)thumb.thumb, (uint8_t*)thumb.thumb + thumb.tlength);
+            outFormat = 2; // JPEG
+        } else {
+            // Decode, fix orientation, re-encode as PNG
+            outputData = fixOrientationAndEncodePNG(
+                (const uint8_t*)thumb.thumb,
+                thumb.tlength,
+                orientation,
+                correctedWidth,
+                correctedHeight
+            );
+            outFormat = 1; // PNG
+        }
+    } else if (tformat == LIBRAW_THUMBNAIL_BITMAP) {
+        // Always decode and re-encode as PNG (orientation may be needed)
+        outputData = fixOrientationAndEncodePNG(
+            (const uint8_t*)thumb.thumb,
+            thumb.tlength,
+            orientation,
+            correctedWidth,
+            correctedHeight
+        );
+        outFormat = 1; // PNG
+    } else {
+        throw std::runtime_error("Unsupported thumbnail format: " + std::to_string(tformat));
+    }
+
+    val result = val::object();
+    result.set("width", correctedWidth);
+    result.set("height", correctedHeight);
+    result.set("format", outFormat); // 1=PNG, 2=JPEG
+    result.set("dataSize", (unsigned)outputData.size());
+
+    val typedArrayCtor = val::global("Uint8Array");
+    val jsData = typedArrayCtor.new_(val((unsigned)outputData.size()));
+    val memView = val(typed_memory_view(outputData.size(), outputData.data()));
+    jsData.call<void>("set", memView);
+    result.set("data", jsData);
+
+    return result;
 	}
-	
 
 private:
 	LibRaw* processor_ = nullptr;
@@ -1193,6 +1241,84 @@ private:
 			delete[] params.dark_frame;
 			params.dark_frame = nullptr;
 		}
+	}
+
+	void reportErrorToJS(const std::string& msg) {
+    EM_ASM({
+        console.error(UTF8ToString($0));
+    }, msg.c_str());
+	}
+
+	std::vector<uint8_t> fixOrientationAndEncodePNG(
+    const uint8_t* inputData,
+    size_t length,
+    int orientation,
+    int& outWidth,
+    int& outHeight
+	) {
+    int w, h, channels;
+    unsigned char* decoded = stbi_load_from_memory(
+        inputData, length, &w, &h, &channels, 4  // force RGBA
+    );
+    if (!decoded) {
+        throw std::runtime_error("Failed to decode image for orientation correction");
+    }
+
+    int new_w = w, new_h = h;
+    if (orientation == 5 || orientation == 6 || orientation == 7 || orientation == 8) {
+        new_w = h;
+        new_h = w;
+    }
+
+    std::vector<unsigned char> rotated(new_w * new_h * 4);
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int dx = x, dy = y;
+            switch (orientation) {
+                case 2: // Mirror horizontal
+                    dx = w - 1 - x; dy = y; break;
+                case 3: // Rotate 180
+                    dx = w - 1 - x; dy = h - 1 - y; break;
+                case 4: // Mirror vertical
+                    dx = x; dy = h - 1 - y; break;
+                case 5: // Mirror horizontal and rotate 270 CW
+                    dx = y; dy = w - 1 - x; break;
+                case 6: // Rotate 90 CW
+                    dx = y; dy = w - 1 - x; break;
+                case 7: // Mirror horizontal and rotate 90 CW
+                    dx = h - 1 - y; dy = x; break;
+                case 8: // Rotate 270 CW
+                    dx = h - 1 - y; dy = x; break;
+                default: // Normal
+                    dx = x; dy = y; break;
+            }
+            std::memcpy(&rotated[(dx + dy * new_w) * 4], &decoded[(x + y * w) * 4], 4);
+        }
+    }
+
+    stbi_image_free(decoded);
+
+    outWidth = new_w;
+    outHeight = new_h;
+
+    std::vector<uint8_t> output;
+    bool ok = stbi_write_png_to_func(
+        [](void* context, void* data, int size) {
+            auto* out = reinterpret_cast<std::vector<uint8_t>*>(context);
+            out->insert(out->end(), (uint8_t*)data, (uint8_t*)data + size);
+        },
+        &output,
+        new_w,
+        new_h,
+        4,
+        rotated.data(),
+        new_w * 4
+    );
+    if (!ok) {
+        throw std::runtime_error("Failed to encode PNG");
+    }
+    return output;
 	}
 };
 

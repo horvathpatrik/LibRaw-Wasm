@@ -2,7 +2,7 @@
 
 set -e
 
-rm -rf libs includes LibRawSource lcms2 2>/dev/null || true
+rm -rf libs includes LibRawSource StbImage lcms2 2>/dev/null || true
 mkdir libs
 mkdir includes
 
@@ -61,6 +61,12 @@ cp -R lib/.libs/* ../libs/
 cp -R libraw ../includes/
 popd  # out of LibRawSource
 
+git clone https://github.com/nothings/stb.git StbImage
+pushd StbImage
+mkdir ../includes/stb
+cp -R ./*.h ../includes/stb
+popd  # out of StbImage
+
 #---------------------------------------------------------------------------------
 # 3) Build the final WASM from libraw_wrapper.cpp
 #---------------------------------------------------------------------------------
@@ -78,6 +84,7 @@ emcc \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=256MB \
   -s USE_PTHREADS=1 \
+  -s EXPORT_NAME=createLibRawModule \
   -s ENVIRONMENT="web,worker" \
   -msimd128 \
   -O3 -flto -pthread \

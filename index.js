@@ -1,6 +1,6 @@
 export default class LibRaw {
-	constructor() {
-		this.worker = new Worker(new URL('./worker.js', import.meta.url), {type:"module"});
+	constructor(workerUrl = './worker.js') {
+		this.worker = new Worker(new URL(workerUrl, import.meta.url), {type:"module"});
 		this.waitForWorker = false;
 		this.worker.onmessage = ({data}) => {
 			if(this.waitForWorker) {
